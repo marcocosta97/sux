@@ -166,7 +166,7 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZeroHa
 #endif
 	}
 
-	uint64_t selectZero(const uint64_t rank) {
+	uint64_t selectZero(const uint64_t rank) const {
 #ifdef DEBUG
 		printf("Selecting %" PRId64 "\n...", rank);
 #endif
@@ -214,7 +214,7 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZeroHa
 		return word_index * 64 + select64(word, residual);
 	}
 
-	uint64_t selectZero(const uint64_t rank, uint64_t *const next) {
+	uint64_t selectZero(const uint64_t rank, uint64_t *const next) const {
 		const uint64_t s = selectZero(rank);
 		int curr = s / 64;
 

@@ -3,3 +3,4 @@ html/
 include/
 latex/
 README.html
+.DS_Store

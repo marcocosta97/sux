@@ -28,9 +28,9 @@
 
 #pragma once
 
-#include "Rank.hpp"
-#include "SimpleSelectHalf.hpp"
-#include "SimpleSelectZeroHalf.hpp"
+#include <sux/bits/Rank.hpp>
+#include <sux/bits/SimpleSelectHalf.hpp>
+#include <sux/bits/SimpleSelectZeroHalf.hpp>
 #include <cstdint>
 #include <vector>
 
@@ -49,306 +49,289 @@ using namespace sux;
  * @tparam AT a type of memory allocation out of sux::util::AllocType.
  */
 
-template <util::AllocType AT = util::AllocType::MALLOC> class EliasFano : public Rank, public Select {
-  private:
-	util::Vector<uint64_t, AT> lower_bits, upper_bits;
-	SimpleSelectHalf<AT> select_upper;
-	SimpleSelectZeroHalf<AT> selectz_upper;
-	uint64_t num_bits, num_ones;
-	int l;
-	int block_size;
-	int block_length;
-	uint64_t block_size_mask;
-	uint64_t lower_l_bits_mask;
-	uint64_t ones_step_l;
-	uint64_t msbs_step_l;
-	uint64_t compressor;
+template <util::AllocType AT = util::AllocType::MALLOC, bool AllowRank = true> class EliasFano
+{
+public:
+    util::Vector<uint64_t, AT> lower_bits, upper_bits;
+    SimpleSelectZeroHalf<AT> selectz_upper;
+    uint64_t num_bits, num_ones;
+    int l;
+    uint64_t lower_l_bits_mask;
 
-	__inline static void set(util::Vector<uint64_t, AT> &bits, const uint64_t pos) { bits[pos / 64] |= 1ULL << pos % 64; }
+    __inline static void set(util::Vector<uint64_t, AT> &bits, const uint64_t pos)
+    { bits[pos / 64] |= 1ULL << pos % 64; }
 
-	__inline static uint64_t get_bits(util::Vector<uint64_t, AT> &bits, const uint64_t start, const int width) {
-		const int start_word = start / 64;
-		const int start_bit = start % 64;
-		const int total_offset = start_bit + width;
-		const uint64_t result = bits[start_word] >> start_bit;
-		return (total_offset <= 64 ? result : result | bits[start_word + 1] << (64 - start_bit)) & ((1ULL << width) - 1);
-	}
+    __inline static uint64_t get_bits(const util::Vector<uint64_t, AT> &bits, const uint64_t start, const int width)
+    {
+        const int start_word = start / 64;
+        const int start_bit = start % 64;
+        const int total_offset = start_bit + width;
+        const uint64_t result = bits[start_word] >> start_bit;
+        return (total_offset <= 64 ? result : result | bits[start_word + 1] << (64 - start_bit)) &
+               ((1ULL << width) - 1);
+    }
 
-	__inline static void set_bits(util::Vector<uint64_t, AT> &bits, const uint64_t start, const int width, const uint64_t value) {
-		const uint64_t start_word = start / 64;
-		const uint64_t end_word = (start + width - 1) / 64;
-		const uint64_t start_bit = start % 64;
+    __inline static void
+    set_bits(util::Vector<uint64_t, AT> &bits, const uint64_t start, const int width, const uint64_t value)
+    {
+        const uint64_t start_word = start / 64;
+        const uint64_t end_word = (start + width - 1) / 64;
+        const uint64_t start_bit = start % 64;
 
-		if (start_word == end_word) {
-			bits[start_word] &= ~(((1ULL << width) - 1) << start_bit);
-			bits[start_word] |= value << start_bit;
-		} else {
-			// Here start_bit > 0.
-			bits[start_word] &= (1ULL << start_bit) - 1;
-			bits[start_word] |= value << start_bit;
-			bits[end_word] &= -(1ULL << (width - 64 + start_bit));
-			bits[end_word] |= value >> (64 - start_bit);
-		}
-	}
+        if (start_word == end_word)
+        {
+            bits[start_word] &= ~(((1ULL << width) - 1) << start_bit);
+            bits[start_word] |= value << start_bit;
+        }
+        else
+        {
+            // Here start_bit > 0.
+            bits[start_word] &= (1ULL << start_bit) - 1;
+            bits[start_word] |= value << start_bit;
+            bits[end_word] &= -(1ULL << (width - 64 + start_bit));
+            bits[end_word] |= value >> (64 - start_bit);
+        }
+    }
 
-  public:
-	/** Creates a new instance using a given bit vector.
-	 *
-	 * Note that the bit vector is read only at construction time.
-	 *
-	 * @param bits a bit vector of 64-bit words.
-	 * @param num_bits the length (in bits) of the bit vector.
-	 */
-	EliasFano(const uint64_t *const bits, const uint64_t num_bits) {
-		const uint64_t num_words = (num_bits + 63) / 64;
-		uint64_t m = 0;
-		for (uint64_t i = num_words; i-- != 0;) m += __builtin_popcountll(bits[i]);
-		num_ones = m;
-		this->num_bits = num_bits;
-		l = num_ones == 0 ? 0 : max(0, lambda_safe(num_bits / num_ones));
+public:
 
-#ifdef DEBUG
-		printf("Number of ones: %lld l: %d\n", num_ones, l);
-		printf("Upper bits: %lld\n", num_ones + (num_bits >> l) + 1);
-		printf("Lower bits: %lld\n", num_ones * l);
-#endif
+    EliasFano() = default;
 
-		const uint64_t lower_bits_mask = (1ULL << l) - 1;
+    /** Creates a new instance using an
+     *  explicit list of positions for the ones in a bit vector.
+     *
+     *  Note that the list is read only at construction time.
+     *
+     *  In practice this constructor builds an Elias-Fano
+     *  representation of the given list. select(const uint64_t rank) will retrieve
+     *  an element of the list, and rank(const size_t pos) will return how many
+     *  element of the list are smaller than the argument.
+     *
+     * @param begin an iterator to the beginning of the list.
+     * @param end an iterator to the end of the list.
+     * @param remove_duplicates if true, duplicates in the list are removed. (NOTE: if true, the original list can be modified)
+     */
+    template <class t_itr>
+    EliasFano(const t_itr begin, const t_itr end, bool remove_duplicates = false)
+    {
+        auto last = (remove_duplicates) ? std::unique(begin, end) : end;
 
-		lower_bits.size((num_ones * l + 63) / 64 + 2 * (l == 0));
-		upper_bits.size(((num_ones + (num_bits >> l) + 1) + 63) / 64);
-
-		uint64_t pos = 0;
-		for (uint64_t i = 0; i < num_bits; i++) {
-			if (bits[i / 64] & (1ULL << i % 64)) {
-				if (l != 0) set_bits(lower_bits, pos * l, l, i & lower_bits_mask);
-				set(upper_bits, (i >> l) + pos);
-				pos++;
-			}
-		}
+        num_ones = std::distance(begin, last);
+        this->num_bits = *(last - 1) + 1;
+        l = num_ones == 0 ? 0 : max(0, lambda_safe(num_bits / num_ones));
 
 #ifdef DEBUG
-		// printf("First lower: %016llx %016llx %016llx %016llx\n", lower_bits[0], lower_bits[1],
-		//       lower_bits[2], lower_bits[3]);
-		// printf("First upper: %016llx %016llx %016llx %016llx\n", upper_bits[0], upper_bits[1],
-		//       upper_bits[2], upper_bits[3]);
+        printf("Number of ones: %lld l: %d\n", num_ones, l);
+        printf("Upper bits: %lld\n", num_ones + (num_bits >> l) + 1);
+        printf("Lower bits: %lld\n", num_ones * l);
 #endif
 
-		select_upper = SimpleSelectHalf(&upper_bits, num_ones + (num_bits >> l));
-		selectz_upper = SimpleSelectZeroHalf(&upper_bits, num_ones + (num_bits >> l));
+        const uint64_t lower_bits_mask = (1ULL << l) - 1;
 
-		block_size = 0;
-		do
-			++block_size;
-		while (block_size * l + block_size <= 64 && block_size <= l);
-		block_size--;
+        lower_bits.size((num_ones * l + 63) / 64 + 2 * (l == 0));
+        upper_bits.size(((num_ones + (num_bits >> l) + 1) + 63) / 64);
+
+        size_t i = 0;
+        for (auto it = begin; it < last; ++it)
+        {
+            if (l != 0) set_bits(lower_bits, i * l, l, *it & lower_bits_mask);
+            set(upper_bits, (*it >> l) + i);
+            ++i;
+        }
 
 #ifdef DEBUG
-		printf("Block size: %d\n", block_size);
+        printf("First lower: %016llx %016llx %016llx %016llx\n", lower_bits[0], lower_bits[1], lower_bits[2], lower_bits[3]);
+        printf("First upper: %016llx %016llx %016llx %016llx\n", upper_bits[0], upper_bits[1], upper_bits[2], upper_bits[3]);
 #endif
 
-		block_size_mask = (1ULL << block_size) - 1;
-		block_length = block_size * l;
+        if constexpr (AllowRank)
+            selectz_upper = SimpleSelectZeroHalf(&upper_bits, num_ones + (num_bits >> l));
 
-#ifdef PARSEARCH
-		ones_step_l = 0;
-		for (int i = 0; i < block_size; i++) ones_step_l |= 1ULL << i * l;
-		msbs_step_l = ones_step_l << (l - 1);
+        lower_l_bits_mask = (1ULL << l) - 1;
+    }
 
-		compressor = 0;
-		for (int i = 0; i < block_size; i++) compressor |= 1ULL << ((l - 1) * i + block_size);
+    uint64_t rank(const size_t k) const
+    {
+        static_assert(AllowRank, "Cannot call rank() if AllowRank is false");
+
+        if (num_ones == 0) return 0;
+        if (k >= num_bits) return num_ones;
+#ifdef DEBUG
+        printf("Ranking %lld...\n", k);
 #endif
+        const uint64_t k_shiftr_l = k >> l;
 
-		lower_l_bits_mask = (1ULL << l) - 1;
-	}
 
-	/** Creates a new instance using an
-	 *  explicit list of positions for the ones in a bit vector.
-	 *
-	 *  Note that the list is read only at construction time.
-	 *
-	 *  In practice this constructor builds an Elias-Fano
-	 *  representation of the given list. select(const uint64_t rank) will retrieve
-	 *  an element of the list, and rank(const size_t pos) will return how many
-	 *  element of the list are smaller than the argument.
-	 *
-	 * @param ones a list of positions of the ones in a bit vector.
-	 * @param num_bits the length (in bits) of the bit vector.
-	 */
-	EliasFano(const std::vector<uint64_t> ones, const uint64_t num_bits) {
-		num_ones = ones.size();
-		this->num_bits = num_bits;
-		l = num_ones == 0 ? 0 : max(0, lambda_safe(num_bits / num_ones));
+        int64_t pos = selectz_upper.selectZero(k_shiftr_l);
+        uint64_t rank = pos - (k_shiftr_l);
 
 #ifdef DEBUG
-		printf("Number of ones: %lld l: %d\n", num_ones, l);
-		printf("Upper bits: %lld\n", num_ones + (num_bits >> l) + 1);
-		printf("Lower bits: %lld\n", num_ones * l);
+        printf("Position: %lld rank: %lld\n", pos, rank);
 #endif
+        uint64_t rank_times_l = rank * l;
+        const uint64_t k_lower_bits = k & lower_l_bits_mask;
 
-		const uint64_t lower_bits_mask = (1ULL << l) - 1;
+        do
+        {
+            rank--;
+            rank_times_l -= l;
+            pos--;
+        } while (pos >= 0 && (upper_bits[pos / 64] & 1ULL << pos % 64) &&
+                 get_bits(lower_bits, rank_times_l, l) >= k_lower_bits);
 
-		lower_bits.size((num_ones * l + 63) / 64 + 2 * (l == 0));
-		upper_bits.size(((num_ones + (num_bits >> l) + 1) + 63) / 64);
+        return ++rank;
+    }
 
-		for (uint64_t i = 0; i < num_ones; i++) {
-			if (l != 0) set_bits(lower_bits, i * l, l, ones[i] & lower_bits_mask);
-			set(upper_bits, (ones[i] >> l) + i);
-		}
+    uint64_t rankv2(const size_t k) const
+    {
+        if (num_ones == 0) return 0;
+        if (k >= num_bits) return num_ones;
 
-#ifdef DEBUG
-		printf("First lower: %016llx %016llx %016llx %016llx\n", lower_bits[0], lower_bits[1], lower_bits[2], lower_bits[3]);
-		printf("First upper: %016llx %016llx %016llx %016llx\n", upper_bits[0], upper_bits[1], upper_bits[2], upper_bits[3]);
-#endif
+        const uint64_t k_shiftr_l = k >> l;
 
-		select_upper = SimpleSelectHalf(&upper_bits, num_ones + (num_bits >> l));
-		selectz_upper = SimpleSelectZeroHalf(&upper_bits, num_ones + (num_bits >> l));
+        uint64_t pos_hi = selectz_upper.selectZero(k_shiftr_l);;
+        uint64_t pos_lo = 0;
+        if (k_shiftr_l != 0)
+            pos_lo = selectz_upper.selectZero(k_shiftr_l - 1) + 1;
 
-		block_size = 0;
-		do
-			++block_size;
-		while (block_size * l + block_size <= 64 && block_size <= l);
-		block_size--;
+        size_t pos;
+        size_t rank;
+        auto count = pos_hi - pos_lo;
 
-#ifdef DEBUG
-		printf("Block size: %d\n", block_size);
-#endif
-		block_size_mask = (1ULL << block_size) - 1;
-		block_length = block_size * l;
+        if (count < 8) {
+            pos = pos_hi;
+            rank = pos_hi - k_shiftr_l;
+            uint64_t rank_times_l = rank * l;
+            const uint64_t k_lower_bits = k & lower_l_bits_mask;
+            do
+            {
+                rank--;
+                rank_times_l -= l;
+                pos--;
+            } while (pos >= pos_lo && (upper_bits[pos / 64] & 1ULL << pos % 64) &&
+                     get_bits(lower_bits, rank_times_l, l) >= k_lower_bits);
+        } else {
+            auto rank_lo = pos_lo - k_shiftr_l;
+            auto rank_hi = pos_hi - k_shiftr_l;
+            const uint64_t k_lower_bits = k & lower_l_bits_mask;
 
-#ifdef PARSEARCH
-		ones_step_l = 0;
-		for (int i = 0; i < block_size; i++) ones_step_l |= 1ULL << i * l;
-		msbs_step_l = ones_step_l << (l - 1);
+            while (count > 0)
+            {
+                auto step = count / 2;
+                auto mid = rank_lo + step;
+                if (get_bits(lower_bits, mid * l, l) < k_lower_bits)
+                {
+                    rank_lo = mid + 1;
+                    count -= step + 1;
+                }
+                else
+                {
+                    count = step;
+                }
+            }
+            --rank_lo;
+            pos = pos_hi - (rank_hi - rank_lo);
+            rank = rank_lo;
+        }
+        return ++rank;
+    }
 
-		compressor = 0;
-		for (int i = 0; i < block_size; i++) compressor |= 1ULL << ((l - 1) * i + block_size);
-#endif
+    struct ElementPointer {
+        size_t rank;
+        size_t pos_upper;
+        const EliasFano<AT, AllowRank> *ef;
 
-		lower_l_bits_mask = (1ULL << l) - 1;
-	}
+        ElementPointer(size_t rank, size_t pos_upper, const EliasFano<AT, AllowRank> *ef)
+            : rank(rank), pos_upper(pos_upper), ef(ef) {}
 
-	uint64_t rank(const size_t k) {
-		if (num_ones == 0) return 0;
-		if (k >= num_bits) return num_ones;
-#ifdef DEBUG
-		printf("Ranking %lld...\n", k);
-#endif
-		const uint64_t k_shiftr_l = k >> l;
 
-#ifndef PARSEARCH
-		int64_t pos = selectz_upper.selectZero(k_shiftr_l);
-		uint64_t rank = pos - (k_shiftr_l);
+        uint64_t operator*() const {
+            return (pos_upper - rank) << ef->l | get_bits(ef->lower_bits, rank * ef->l, ef->l);
+        }
 
-#ifdef DEBUG
-		printf("Position: %lld rank: %lld\n", pos, rank);
-#endif
-		uint64_t rank_times_l = rank * l;
-		const uint64_t k_lower_bits = k & lower_l_bits_mask;
+        size_t index() const { return rank; }
 
-		do {
-			rank--;
-			rank_times_l -= l;
-			pos--;
-		} while (pos >= 0 && (upper_bits[pos / 64] & 1ULL << pos % 64) && get_bits(lower_bits, rank_times_l, l) >= k_lower_bits);
+        ElementPointer& operator++() {
+            rank++;
+            auto curr = pos_upper / 64;
+            uint64_t window = ef->upper_bits[curr] & -1ULL << pos_upper;
+            window &= window - 1;
+            while (window == 0) window = ef->upper_bits[++curr];
+            pos_upper = curr * 64 + __builtin_ctzll(window);
+            return *this;
+        }
+    };
 
-		return ++rank;
-#else
+    ElementPointer at(size_t rank) const {
+        return ElementPointer(rank, 0, this);
+    }
 
-		const uint64_t k_lower_bits = k & lower_l_bits_mask;
 
-#ifdef DEBUG
-		printf("k: %llx lower %d : %llx\n", k, l, k_lower_bits);
-#endif
+    ElementPointer predecessor(const size_t k) const {
+        static_assert(AllowRank, "Cannot call predecessor() if AllowRank is false");
+        const uint64_t k_shiftr_l = k >> l;
 
-		const uint64_t k_lower_bits_step_l = k_lower_bits * ones_step_l;
+        uint64_t pos_hi;
+        uint64_t pos_lo = 0;
+        if (k_shiftr_l == 0) {
+            pos_hi = selectz_upper.selectZero(k_shiftr_l);
+        } else {
+            pos_lo = selectz_upper.selectZero(k_shiftr_l - 1, &pos_hi) + 1;
+        }
 
-		uint64_t pos = selectz_upper.selectZero(k_shiftr_l);
-		uint64_t rank = pos - (k_shiftr_l);
-		uint64_t rank_times_l = rank * l;
+        int64_t pos;
+        size_t rank;
+        auto count = pos_hi - pos_lo;
 
-#ifdef DEBUG
-		printf("pos: %lld rank: %lld\n", pos, rank);
-#endif
+        if (count < 8) {
+            pos = pos_hi;
+            rank = pos_hi - k_shiftr_l;
+            uint64_t rank_times_l = rank * l;
+            const uint64_t k_lower_bits = k & lower_l_bits_mask;
+            do {
+                rank--;
+                rank_times_l -= l;
+                pos--;
+            } while (pos >= pos_lo && get_bits(lower_bits, rank_times_l, l) > k_lower_bits);
+        } else {
+            auto rank_lo = pos_lo - k_shiftr_l;
+            auto rank_hi = pos_hi - k_shiftr_l;
+            const uint64_t k_lower_bits = k & lower_l_bits_mask;
 
-		uint64_t block_upper_bits, block_lower_bits;
+            while (count > 0) {
+                auto step = count / 2;
+                auto mid = rank_lo + step;
+                if (get_bits(lower_bits, mid * l, l) <= k_lower_bits) {
+                    rank_lo = mid + 1;
+                    count -= step + 1;
+                } else {
+                    count = step;
+                }
+            }
+            --rank_lo;
+            pos = pos_hi - (rank_hi - rank_lo);
+            rank = rank_lo;
+        }
 
-		while (rank > block_size) {
-			rank -= block_size;
-			rank_times_l -= block_length;
-			pos -= block_size;
-			block_upper_bits = get_bits(upper_bits, pos, block_size);
-			block_lower_bits = get_bits(lower_bits, rank_times_l, block_length);
+        if (pos > 0 && (upper_bits[pos / 64] & 1ULL << pos % 64) == 0) {
+            // find previous set bit
+            auto curr = pos / 64;
+            uint64_t word = upper_bits[curr] & ((1ULL << pos % 64) - 1);
+            while (word == 0) word = upper_bits[--curr];
+            pos = curr * 64 + 63 - __builtin_clzll(word);
+        }
 
-			// printf( "block upper bits: %llx block lower bits: %llx\n", block_upper_bits, block_lower_bits
-			// );
+        return ElementPointer(rank, pos, this);
+    }
 
-			const uint64_t cmp =
-				((((block_lower_bits | msbs_step_l) - (k_lower_bits_step_l & ~msbs_step_l)) | (k_lower_bits_step_l ^ block_lower_bits)) ^ (k_lower_bits_step_l & ~block_lower_bits)) & msbs_step_l;
+    size_t numOnes() const { return num_ones; }
 
-			// printf( "Compare: %016llx compressed: %016llx shifted: %016llx\n", cmp, cmp * compressor, cmp
-			// * compressor >> block_size * l );
-
-			const uint64_t cmp_compr = ~(cmp * compressor >> block_length & block_upper_bits) & block_size_mask;
-
-			// printf( "Combined compare: %llx\n", ~t );
-
-			if (cmp_compr) return rank + 1 + lambda_safe(cmp_compr);
-		}
-
-		block_upper_bits = get_bits(upper_bits, pos - rank, rank);
-		block_lower_bits = get_bits(lower_bits, 0, rank_times_l);
-
-		// printf( "\nTail (%lld bits)...\n", rank );
-
-		// printf( "block upper bits: %llx block lower bits: %llx\n", block_upper_bits, block_lower_bits
-		// );
-
-		const uint64_t cmp =
-			((((block_lower_bits | msbs_step_l) - (k_lower_bits_step_l & ~msbs_step_l)) | (k_lower_bits_step_l ^ block_lower_bits)) ^ (k_lower_bits_step_l & ~block_lower_bits)) & msbs_step_l;
-
-		// printf( "Compressor: %llx\n", compressor );
-		// printf( "Compare: %016llx compressed: %016llx shifted: %016llx\n", cmp, cmp * compressor, cmp *
-		// compressor >> block_size * l );
-
-		const uint64_t cmp_compr = ~(cmp * compressor >> block_length & block_upper_bits) & (1ULL << rank) - 1;
-
-		// printf( "Combined compare: %llx\n", ~t );
-
-		return 1 + lambda_safe(cmp_compr);
-
-#endif
-	}
-
-	size_t select(const uint64_t rank) {
-#ifdef DEBUG
-		printf("Selecting %lld...\n", rank);
-#endif
-#ifdef DEBUG
-		printf("Returning %lld = %llx << %d | %llx\n", (select_upper.select(rank) - rank) << l | get_bits(lower_bits, rank * l, l), select_upper.select(rank) - rank, l,
-			   get_bits(lower_bits, rank * l, l));
-#endif
-		return (select_upper.select(rank) - rank) << l | get_bits(lower_bits, rank * l, l);
-	}
-
-	uint64_t select(const uint64_t rank, uint64_t *const next) {
-		uint64_t s, t;
-		s = select_upper.select(rank, &t) - rank;
-		t -= rank + 1;
-
-		const uint64_t position = rank * l;
-		*next = t << l | get_bits(lower_bits, position + l, l);
-		return s << l | get_bits(lower_bits, position, l);
-	}
-
-	/** Returns the size in bits of the underlying bit vector. */
-	size_t size() const { return num_bits; }
-
-	/** Returns an estimate of the size in bits of this structure. */
-	uint64_t bitCount() {
-		return upper_bits.bitCount() - sizeof(upper_bits) * 8 + lower_bits.bitCount() - sizeof(lower_bits) * 8 + select_upper.bitCount() - sizeof(select_upper) * 8 + selectz_upper.bitCount() -
-			   sizeof(selectz_upper) * 8 + sizeof(*this) * 8;
-	}
+    /** Returns an estimate of the size in bits of this structure. */
+    uint64_t bitCount() const {
+        auto select_upper = SimpleSelectHalf(&upper_bits, num_ones + (num_bits >> l));
+        return upper_bits.bitCount() - sizeof(upper_bits) * 8 + lower_bits.bitCount() - sizeof(lower_bits) * 8 + select_upper.bitCount() - sizeof(select_upper) * 8 + selectz_upper.bitCount() -
+            sizeof(selectz_upper) * 8 + sizeof(*this) * 8;
+    }
 };
 
 } // namespace sux::bits

@@ -33,7 +33,6 @@
 #include <assert.h>
 #include <iostream>
 #include <string>
-#include <utility>
 #include <sys/mman.h>
 
 namespace sux::util {
@@ -88,18 +87,18 @@ template <typename T, AllocType AT = MALLOC> class Vector : public Expandable {
 	static constexpr int PROT = PROT_READ | PROT_WRITE;
 	static constexpr int FLAGS = MAP_PRIVATE | MAP_ANONYMOUS | (AT == FORCEHUGEPAGE ? MAP_HUGETLB : 0);
 
-  private:
+  public:
 	size_t _size = 0, _capacity = 0;
 	T *data = nullptr;
 
   public:
-	Vector<T, AT>() = default;
+	Vector() = default;
 
-	explicit Vector<T, AT>(size_t length) { size(length); }
+	explicit Vector(size_t length) { size(length); }
 
-	explicit Vector<T, AT>(const T *data, size_t length) : Vector(length) { memcpy(this->data, data, length); }
+	explicit Vector(const T *data, size_t length) : Vector(length) { memcpy(this->data, data, length); }
 
-	~Vector<T, AT>() {
+	~Vector() {
 		if (data) {
 			if (AT == MALLOC) {
 				free(data);
