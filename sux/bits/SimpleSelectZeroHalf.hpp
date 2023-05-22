@@ -229,6 +229,27 @@ template <util::AllocType AT = util::AllocType::MALLOC> class SimpleSelectZeroHa
 
 	/** Returns an estimate of the size (in bits) of this structure. */
 	size_t bitCount() const { return inventory.bitCount() - sizeof(inventory) * 8 + sizeof(*this) * 8; };
+
+    friend std::ostream &operator<<(std::ostream &out, const SimpleSelectZeroHalf<AT> &sz)
+    {
+        out.write(reinterpret_cast<const char *>(&sz.num_words), sizeof(sz.num_words));
+        out.write(reinterpret_cast<const char *>(&sz.inventory_size), sizeof(sz.inventory_size));
+        out.write(reinterpret_cast<const char *>(&sz.num_zeros), sizeof(sz.num_zeros));
+        out.write(reinterpret_cast<const char *>(sz.bits), sz.num_words * sizeof(*sz.bits));
+        out << sz.inventory;
+        return out;
+    }
+
+    friend std::istream &operator>>(std::istream &in, SimpleSelectZeroHalf<AT> &sz) {
+        in.read(reinterpret_cast<char *>(&sz.num_words), sizeof(sz.num_words));
+        in.read(reinterpret_cast<char *>(&sz.inventory_size), sizeof(sz.inventory_size));
+        in.read(reinterpret_cast<char *>(&sz.num_zeros), sizeof(sz.num_zeros));
+        auto temp = new uint64_t[sz.num_words];
+        in.read(reinterpret_cast<char *>(temp), sz.num_words * sizeof(*sz.bits));
+        sz.bits = temp;
+        in >> sz.inventory;
+        return in;
+    }
 };
 
-} // namespace sux::bits
+}// namespace sux::bits

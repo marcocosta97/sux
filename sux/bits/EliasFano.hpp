@@ -332,6 +332,28 @@ public:
         return upper_bits.bitCount() - sizeof(upper_bits) * 8 + lower_bits.bitCount() - sizeof(lower_bits) * 8 + select_upper.bitCount() - sizeof(select_upper) * 8 + selectz_upper.bitCount() -
             sizeof(selectz_upper) * 8 + sizeof(*this) * 8;
     }
+
+    friend std::ostream& operator<<(std::ostream& out, const EliasFano& ef) {
+        out.write(reinterpret_cast<const char*>(&ef.num_bits), sizeof(ef.num_bits));
+        out.write(reinterpret_cast<const char*>(&ef.l), sizeof(ef.l));
+        out.write(reinterpret_cast<const char*>(&ef.num_ones), sizeof(ef.num_ones));
+        out.write(reinterpret_cast<const char*>(&ef.lower_l_bits_mask), sizeof(ef.lower_l_bits_mask));
+        out << ef.selectz_upper;
+        out << ef.upper_bits;
+        out << ef.lower_bits;
+        return out;
+    }
+
+    friend std::istream& operator>>(std::istream& in, EliasFano& ef) {
+        in.read(reinterpret_cast<char*>(&ef.num_bits), sizeof(ef.num_bits));
+        in.read(reinterpret_cast<char*>(&ef.l), sizeof(ef.l));
+        in.read(reinterpret_cast<char*>(&ef.num_ones), sizeof(ef.num_ones));
+        in.read(reinterpret_cast<char*>(&ef.lower_l_bits_mask), sizeof(ef.lower_l_bits_mask));
+        in >> ef.selectz_upper;
+        in >> ef.upper_bits;
+        in >> ef.lower_bits;
+        return in;
+    }
 };
 
 } // namespace sux::bits
